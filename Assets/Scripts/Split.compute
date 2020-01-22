@@ -1,0 +1,43 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+RWTexture2D<float4> Result;
+
+[numthreads(64,1,1)]
+void CSSplit (uint3 id : SV_DispatchThreadID) {
+
+    Triangle tri = dataBuffer[id.x];
+    float mag1 = length(tri.b - tri.a);
+    float mag2 = length(tri.c - tri.a);
+    float mag3 = length(tri.c - tri.b);
+
+    SplitTriangle split;
+    if (mag1 > mag2 && mag1 > mag3) {
+        split.m = (tri.a + tri.b) / 2;
+        split.o = tri.c;
+        split.a = tri.a;
+        split.b = tri.b;
+    } else if (mag2 > mag3) {
+        split.m = (tri.c + tri.a) / 2;
+        split.o = tri.b;
+        split.a = tri.c;
+        split.b = tri.a;
+    } else {
+        split.m = (tri.c + tri.b) / 2;
+        split.o = tri.a;
+        split.a = tri.c;
+        split.b = tri.b;
+    }
+    
+    // first triangle
+    dataBuffer[id.x].a = split.o;
+    dataBuffer[id.x].b = split.a;
+    dataBuffer[id.x].c = split.m;
+
+    // second triangle
+    extraBuffer[id.x].a = split.o;
+    extraBuffer[id.x].b = split.m;
+    extraBuffer[id.x].c = split.b;
+}

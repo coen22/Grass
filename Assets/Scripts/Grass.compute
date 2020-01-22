@@ -1,0 +1,145 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+#pragma kernel CSSplit
+
+struct Triangle
+{
+    float3 a;
+    float3 b;
+    float3 c;
+};
+
+struct SplitTriangle
+{
+    float3 m;
+    float3 o;
+    float3 a;
+    float3 b;
+};
+
+float randWidth;
+float randHeight;
+float randLeanDist;
+float maxWidth;
+float maxHeight;
+float leanDist;
+
+RWStructuredBuffer<Triangle> dataBuffer;
+RWStructuredBuffer<float3> outputBuffer;
+RWStructuredBuffer<float3> normalBuffer;
+
+uint bufferSize;
+
+float3 middle(int id) {
+    return (dataBuffer[id].a + dataBuffer[id].b + dataBuffer[id].c) / 3;
+}
+
+float3 normal(int id) {
+    float3 side1 = dataBuffer[id].b - dataBuffer[id].a;
+    float3 side2 = dataBuffer[id].c - dataBuffer[id].a;
+
+    return cross(side1, side2);
+}
+
+// Quaternion multiplication
+// https://gist.github.com/mattatz/40a91588d5fb38240403f198a938a593
+float4 qmul(float4 q1, float4 q2)
+{
+    return float4(
+        q2.xyz * q1.w + q1.xyz * q2.w + cross(q1.xyz, q2.xyz),
+        q1.w * q2.w - dot(q1.xyz, q2.xyz)
+    );
+}
+
+uint Hash(uint s)
+{
+    s ^= 2747636419u;
+    s *= 2654435769u;
+    s ^= s >> 16;
+    s *= 2654435769u;
+    s ^= s >> 16;
+    s *= 2654435769u;
+    return s;
+}
+
+float Random(uint seed)
+{
+    return float(Hash(seed)) / 4294967295.0; // 2^32-1
+}
+
+float Rand(float2 co){
+    return frac(sin(dot(co.xy, float2(12.9898,78.233))) * 43758.5453);
+}
+
+float3 RandMiddle(int id) {
+    float randA = Rand(dataBuffer[id].a.xy);
+    float randB = Rand(dataBuffer[id].b.yz);
+    float randC = Rand(dataBuffer[id].c.xz);
+    return (dataBuffer[id].a * randA +
+            dataBuffer[id].b * randB +
+            dataBuffer[id].c * randC) /
+            (randA + randB + randC);
+}
+
+[numthreads(64,1,1)]
+void CSMain (uint3 id : SV_DispatchThreadID) {
+    float3 midPoint = RandMiddle(id.x);
+    float3 bladeNormal = normal(id.x);
+
+    float3 sideDir = normalize(dataBuffer[id.x].a - midPoint);
+    float3 leanDir = cross(sideDir, bladeNormal);
+
+    // TODO add rotation
+
+    float2 seed = dataBuffer[id.x].a.xy + dataBuffer[id.x].b.yz + dataBuffer[id.x].c.xz;
+    float3 a = midPoint + sideDir * (maxWidth + (Rand(seed) - 0.5) * randWidth);
+    float3 b = midPoint - sideDir * (maxWidth + (Rand(seed) - 0.5) * randWidth);
+    float3 c = midPoint + normalize(bladeNormal + leanDir * (leanDist + (Rand(seed) - 0.5) * randLeanDist)) * (maxHeight + (Rand(seed) - 0.5) * randHeight);
+
+    outputBuffer[id.x * 3] = a;
+    outputBuffer[id.x * 3 + 1] = b;
+    outputBuffer[id.x * 3 + 2] = c;
+    
+    float3 bladeSideNormal = (bladeNormal + cross(b - a, c - a)) / 2;
+
+    normalBuffer[id.x * 3] = bladeSideNormal;
+    normalBuffer[id.x * 3 + 1] = bladeSideNormal;
+    normalBuffer[id.x * 3 + 2] = bladeNormal;
+}
+
+[numthreads(1,1,1)]
+void CSSplit (uint3 id : SV_DispatchThreadID) {
+
+    Triangle tri = dataBuffer[id.x];
+    float mag1 = length(tri.b - tri.a);
+    float mag2 = length(tri.c - tri.a);
+    float mag3 = length(tri.c - tri.b);
+
+    SplitTriangle split;
+    if (mag1 > mag2 && mag1 > mag3) {
+        split.m = (tri.a + tri.b) / 2;
+        split.o = tri.c;
+        split.a = tri.a;
+        split.b = tri.b;
+    } else if (mag2 > mag3) {
+        split.m = (tri.c + tri.a) / 2;
+        split.o = tri.b;
+        split.a = tri.c;
+        split.b = tri.a;
+    } else {
+        split.m = (tri.b + tri.c) / 2;
+        split.o = tri.a;
+        split.a = tri.b;
+        split.b = tri.c;
+    }
+    
+    // first triangle
+    dataBuffer[id.x].a = split.o;
+    dataBuffer[id.x].b = split.a;
+    dataBuffer[id.x].c = split.m;
+
+    // second triangle
+    dataBuffer[id.x + bufferSize].a = split.o;
+    dataBuffer[id.x + bufferSize].b = split.m;
+    dataBuffer[id.x + bufferSize].c = split.b;
+}
